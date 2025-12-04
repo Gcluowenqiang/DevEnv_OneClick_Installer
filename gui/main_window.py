@@ -157,8 +157,6 @@ class MainWindow:
         threading.Thread(target=_download_task, daemon=True).start()
 
     def _init_ui(self):
-        
-    def _init_ui(self):
         # 1. Header
         header_frame = ttk.Frame(self.root, padding=10)
         header_frame.pack(fill=X)
@@ -324,11 +322,15 @@ class MainWindow:
         
         # 保存按钮
         save_btn = ttk.Button(settings_frame, text="保存设置", command=self._save_manager_path, bootstyle=SUCCESS, width=20)
-        save_btn.grid(row=2, column=0, columnspan=3, pady=20)
+        save_btn.grid(row=2, column=0, columnspan=3, pady=(20, 10))
+        
+        # 检查更新按钮 (作为备用入口)
+        update_btn = ttk.Button(settings_frame, text="检查更新", command=self._check_update, bootstyle=INFO, width=20)
+        update_btn.grid(row=3, column=0, columnspan=3, pady=(0, 20))
         
         # 当前设置显示
         current_info_frame = ttk.Labelframe(settings_frame, text="当前设置", padding=10)
-        current_info_frame.grid(row=3, column=0, columnspan=3, sticky=EW, pady=10)
+        current_info_frame.grid(row=4, column=0, columnspan=3, sticky=EW, pady=10)
         
         self.current_info_text = tk.Text(current_info_frame, height=6, state="disabled", font=("Consolas", 9))
         self.current_info_text.pack(fill=BOTH, expand=YES)
