@@ -149,9 +149,19 @@ class MainWindow:
 
         def _on_download_complete(save_path):
             progress_win.destroy()
-            if messagebox.askyesno("下载完成", "新版本下载完成，是否立即重启进行安装？"):
+            if messagebox.askyesno("下载完成", "新版本下载完成，是否立即重启进行安装？\n\n程序将自动关闭并完成更新。"):
+                # 先启动更新脚本
                 success, msg = self.updater.perform_update(save_path)
-                if not success:
+                if success:
+                    # 延迟关闭窗口，确保更新脚本已启动
+                    def _close_app():
+                        try:
+                            self.root.destroy()
+                        except:
+                            import sys
+                            sys.exit(0)
+                    self.root.after(500, _close_app)
+                else:
                     messagebox.showerror("更新失败", msg)
 
         threading.Thread(target=_download_task, daemon=True).start()

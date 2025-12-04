@@ -113,19 +113,85 @@ class Updater:
                 self.logger.warning("Running in source mode, cannot perform self-update.")
                 return False, "源码运行模式下无法自动更新，请手动下载新代码。"
 
-            # 生成批处理脚本
-            bat_path = os.path.join(os.path.dirname(current_exe), "update_installer.bat")
-            with open(bat_path, 'w', encoding='gbk') as f: # Windows bat 通常使用 gbk
+            # 验证新文件是否存在
+            if not os.path.exists(new_exe_path):
+                return False, f"新版本文件不存在: {new_exe_path}"
+            
+            current_dir = os.path.dirname(current_exe)
+            current_name = os.path.basename(current_exe)
+            old_exe_backup = os.path.join(current_dir, f"{current_name}.old")
+            
+            # 获取当前进程ID
+            current_pid = os.getpid()
+            
+            # 规范化路径，确保使用绝对路径
+            current_exe = os.path.abspath(current_exe)
+            new_exe_path = os.path.abspath(new_exe_path)
+            old_exe_backup = os.path.abspath(old_exe_backup)
+            
+            # 转义路径中的特殊字符，使用单引号包裹（PowerShell 单引号是字面量）
+            def escape_ps_path(path):
+                # 将反斜杠转换为正斜杠，或使用单引号
+                # PowerShell 中单引号内的内容会被视为字面量
+                return path.replace("'", "''")  # 单引号需要转义为两个单引号
+            
+            current_exe_escaped = escape_ps_path(current_exe)
+            new_exe_escaped = escape_ps_path(new_exe_path)
+            old_backup_escaped = escape_ps_path(old_exe_backup)
+            
+            # 直接在批处理中使用 PowerShell 内联代码，避免路径编码问题
+            # 使用静默模式，不显示终端窗口
+            bat_path = os.path.join(current_dir, "update_installer.bat")
+            with open(bat_path, 'w', encoding='gbk') as f:
                 f.write('@echo off\n')
-                f.write('timeout /t 2 /nobreak > NUL\n') # 等待主程序退出
-                f.write(f'del "{current_exe}"\n')
-                f.write(f'move "{new_exe_path}" "{current_exe}"\n')
-                f.write(f'start "" "{current_exe}"\n')
-                f.write(f'del "%~f0"\n')
+                f.write('chcp 65001 > NUL 2>&1\n')  # 设置 UTF-8 编码，静默
+                # 使用 -WindowStyle Hidden 隐藏 PowerShell 窗口
+                f.write('powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -Command "')
+                f.write('$ErrorActionPreference = \\"Stop\\"; ')
+                # 使用单引号包裹路径，避免转义问题
+                f.write(f"$currentExe = '{current_exe_escaped}'; ")
+                f.write(f"$newExe = '{new_exe_escaped}'; ")
+                f.write(f"$oldBackup = '{old_backup_escaped}'; ")
+                f.write(f'$currentPid = {current_pid}; ')
+                # 移除所有 Write-Host，静默执行
+                f.write('try { $process = Get-Process -Id $currentPid -ErrorAction SilentlyContinue; ')
+                f.write('if ($process) { $process.CloseMainWindow() | Out-Null; Start-Sleep -Seconds 2; ')
+                f.write('if (-not $process.HasExited) { Stop-Process -Id $currentPid -Force -ErrorAction Stop } } } ')
+                f.write('catch { }; ')  # 静默处理错误
+                f.write('$maxWait = 30; $waited = 0; ')
+                f.write('while ($waited -lt $maxWait) { $process = Get-Process -Id $currentPid -ErrorAction SilentlyContinue; ')
+                f.write('if (-not $process) { break }; Start-Sleep -Seconds 1; $waited++ }; ')
+                f.write('$process = Get-Process -Id $currentPid -ErrorAction SilentlyContinue; ')
+                f.write('if ($process) { Stop-Process -Id $currentPid -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }; ')
+                f.write('Start-Sleep -Seconds 2; ')  # 等待文件释放
+                f.write('$currentDir = Split-Path -Parent $currentExe; ')
+                f.write('if (-not (Test-Path $currentDir)) { New-Item -ItemType Directory -Path $currentDir -Force | Out-Null }; ')
+                f.write('if (-not (Test-Path $newExe)) { throw \\"新版本文件不存在\\" }; ')
+                f.write('try { if (Test-Path $currentExe) { ')
+                f.write('$retryCount = 0; $maxRetries = 5; ')
+                f.write('while ($retryCount -lt $maxRetries) { try { Move-Item -Path $currentExe -Destination $oldBackup -Force -ErrorAction Stop; break } ')
+                f.write('catch { $retryCount++; if ($retryCount -ge $maxRetries) { throw $_ }; Start-Sleep -Seconds 1 } } }; ')
+                f.write('Move-Item -Path $newExe -Destination $currentExe -Force -ErrorAction Stop; ')
+                f.write('if (Test-Path $oldBackup) { Remove-Item -Path $oldBackup -Force -ErrorAction SilentlyContinue }; ')
+                f.write('if (-not (Test-Path $currentExe)) { throw \\"更新后的文件不存在\\" }; ')
+                f.write('$exeDir = Split-Path -Parent $currentExe; ')
+                f.write('try { Start-Process -FilePath $currentExe -WorkingDirectory $exeDir -WindowStyle Hidden -ErrorAction Stop | Out-Null } ')
+                f.write('catch { try { Push-Location $exeDir; cmd /c start \\"\\" \\"$currentExe\\"; Pop-Location } catch { throw \\"无法启动新版本\\" } } } ')
+                f.write('catch { if (Test-Path $oldBackup) { Move-Item -Path $oldBackup -Destination $currentExe -Force -ErrorAction SilentlyContinue }; ')
+                # 只有出错时才显示错误窗口
+                f.write('$wshell = New-Object -ComObject WScript.Shell; ')
+                f.write('$wshell.Popup(\\"更新失败: $_\\", 0, \\"更新错误\\", 0x10); exit 1 }"\n')
+                f.write('if %errorlevel% equ 0 (\n')
+                f.write('    timeout /t 1 /nobreak > NUL 2>&1\n')
+                f.write('    del /F /Q "%~f0" > NUL 2>&1\n')
+                f.write(')\n')
             
             self.logger.info(f"Starting update script: {bat_path}")
-            # CREATE_NO_WINDOW = 0x08000000
-            subprocess.Popen([bat_path], shell=True, creationflags=0x08000000)
+            self.logger.info(f"Current exe: {current_exe}")
+            self.logger.info(f"New exe: {new_exe_path}")
+            
+            # 使用 CREATE_NO_WINDOW 标志静默执行，不显示批处理窗口
+            subprocess.Popen([bat_path], shell=True, cwd=current_dir, creationflags=0x08000000)
             
             return True, "正在重启以完成更新..."
             
